@@ -89,20 +89,13 @@ fprintf('Optimal Singular Values for Speckle Noise: %d\n', optimalSingularValues
 
 % Task 6: Image Compression
 % Calculate the compression ratio for each noisy image using the optimal number of singular values.
-originalSize = numel(grayImage); % Number of pixels in the original image
 
-% Calculate the size of the reconstructed images
-reconstructedSize1 = numel(reconstructedImage1(:, optimalSingularValues1));
-reconstructedSize2 = numel(reconstructedImage2(:, optimalSingularValues2));
-reconstructedSize3 = numel(reconstructedImage3(:, optimalSingularValues3));
+[rows cols] = size(double(grayImage));
+CompressionRatio = 100 * [optimalSingularValues1 optimalSingularValues2 optimalSingularValues3] * (rows + cols)/(rows * cols)
 
-% Calculate compression ratios
-compressionRatio1 = originalSize / reconstructedSize1;
-compressionRatio2 = originalSize / reconstructedSize2;
-compressionRatio3 = originalSize / reconstructedSize3;
 
 % Display compression ratios
-fprintf('Compression Ratio for Gaussian Noise: %.2f\n', compressionRatio1);
-fprintf('Compression Ratio for Salt & Pepper Noise: %.2f\n', compressionRatio2);
-fprintf('Compression Ratio for Speckle Noise: %.2f\n', compressionRatio3);
+fprintf('Compression Ratio for Gaussian Noise: %.2f\n', CompressionRatio(1));
+fprintf('Compression Ratio for Salt & Pepper Noise: %.2f\n', CompressionRatio(2));
+fprintf('Compression Ratio for Speckle Noise: %.2f\n', CompressionRatio(3));
 
