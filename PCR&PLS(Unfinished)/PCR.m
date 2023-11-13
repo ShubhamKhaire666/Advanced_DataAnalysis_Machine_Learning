@@ -1,113 +1,245 @@
 clc
-clear all;
-close all;
+clear all
+close all
 
-% Load the data
-DataFrame = readtable("housing.csv");
+rng('default');
+data=readtable("housing.csv");
+data(:,end)=[];
+varNames=data.Properties.VariableNames;
+data=table2array(data);
 
-% Remove the "ocean_proximity" column
-DataFrame(:,"ocean_proximity") = [];
+[m,n]=size(data);
+p=0.75;
+idx=randperm(m);
+calibration_data=data(idx(1:round(p*m)),:);
+test_data=data(idx(round(p*m)+1:end),:);
 
-% Separate the target variable (median_house_value)
-YCalibration = DataFrame(:,"median_house_value");
+% Number of missing values for each variable
+missing_values_cal=sum(ismissing(calibration_data));
+missing_values_test = sum(ismissing(test_data));
+fprintf('Missing values in the calibration data:\n');
+disp(missing_values_cal);
+fprintf('Missing values in the test data:\n');
+disp(missing_values_test);
 
-% Remove the target variable from the DataFrame
-DataFrame(:,"median_house_value") = [];
+calibration_data = rmmissing(calibration_data);
+test_data = rmmissing(test_data);
 
-% Convert the DataFrame and target variable to arrays
-XCalibration = table2array(DataFrame);
-YCalibration = table2array(YCalibration);
+[calibration_data,mu,sigma]=zscore(calibration_data);
+test_data=normalize(test_data,"Center",mu,"Scale",sigma);
 
-% Check for missing values in XCalibration
-sum(isnan(XCalibration))
+x_train=calibration_data(:,1:end-1);
+y_train=calibration_data(:,end);
+y_calibration=y_train-mean(y_train);
+x_calibration=x_train;
 
-% Check for missing values in YCalibration
-sum(isnan(YCalibration))
+x_test=test_data(:,1:end-1);
+y_test=test_data(:,end);
+y_test=y_test-mean(y_test);
 
-% Remove rows with missing values in XCalibration
-XCalibration = XCalibration(isnan(XCalibration(:,5)) == 0,:);
-YCalibration = YCalibration(isnan(XCalibration(:,5)) == 0,:);
-
-% Calculate the number of observations
-ObservationNumbers = length(YCalibration);
-
-% Create a partition for calibration and validation
-PartitionPercentage = cvpartition(ObservationNumbers, 'HoldOut', 0.2);
-idxCal = training(PartitionPercentage);
-idxVal = test(PartitionPercentage);
-
-% Separate the calibration and validation data
-XCal = XCalibration(idxCal,:);
-YCal = YCalibration(idxCal,:);
-
-XVal = XCalibration(idxVal,:);
-YVal = YCalibration(idxVal,:);
-
-% Standardize the calibration data using z-score normalization
-[XCal, XCalMean, XCalStandardDeviation] = zscore(XCal); 
-
-% Normalize the validation data using the mean and standard deviation from the calibration data
-XVal = normalize(XVal, 'Center', XCalMean, 'Scale', XCalStandardDeviation);
-
-% Center the target variables
-YCal = YCal - mean(YCal);
-YVal = YVal - mean(YCal); 
-
-% Perform Principal Component Analysis (PCA) on the calibration data
-[coeff, Score, Latent, TSquared, ExplainedVariance] = pca(XCal,"Economy",false,"Centered",false);
-
-% Perform Partial Least Squares Regression (PLSR) and Principal Component Regression (PCR) for different numbers of components
-for i = 1:8
-    % Perform PCR
-    betaPCs = regress(YCal, Score(:,1:i));
-    modelPCR(i).betaVars = coeff(:,1:i) * betaPCs;
-    modelPCR(i).betaVars = [mean(YCal) - mean(XCal)*modelPCR(i).betaVars; modelPCR(i).betaVars]; 
-    
-    n = length(YCal);
-    modelPCR(i).Yhat = [ones(n,1) XCal] * modelPCR(i).betaVars;
- 
-    m = length(YVal);
-    modelPCR(i).YPred = [ones(m,1) XVal] * modelPCR(i).betaVars;
-
-    modelPCR(i).Yhat = modelPCR(i).Yhat  + ones(n,1)*mean(YCalibration(idxCal));
-    modelPCR(i).YPred = modelPCR(i).YPred + ones(m,1)*mean(YCalibration(idxCal));
-
-    modelPCR(i).TSS = sum((YCalibration(idxCal) - mean(YCalibration(idxCal))).^2); 
-    modelPCR(i).RSS = sum((YCalibration(idxCal) - modelPCR(i).Yhat).^2);
-    modelPCR(i).R2 = 1 - modelPCR(i).RSS/modelPCR(i).TSS;
-    modelPCR(i).PRESS = sum((YCalibration(idxVal) - modelPCR(i).YPred).^2);
-    modelPCR(i).Q2 = 1 - modelPCR(i).PRESS/modelPCR(i).TSS;
-end
-
-% Perform PLSR for different numbers of components
-for i = 1:8
-    [modelPLS(i).P , modelPLS(i).T, modelPLS(i).Q, modelPLS(i).U, ...
-        modelPLS(i).beta, modelPLS(i).var, modelPLS(i).MSE, modelPLS(i).stats] = plsregress(XCal, YCal, i, "cv",5);
-
-    n = length(YCal);
-    modelPLS(i).Yhat = [ones(n,1) XCal] * modelPLS(i).beta;
- 
-    m = length(YVal);
-    modelPLS(i).YPred = [ones(m,1) XVal] * modelPLS(i).beta;
-
-    modelPLS(i).TSS = sum((YCal - mean(YCal)).^2); 
-    modelPLS(i).RSS = sum((YCal - modelPLS(i).Yhat).^2);
-    modelPLS(i).R2 = 1 - modelPLS(i).RSS/modelPLS(i).TSS;
-    modelPLS(i).PRESS = sum((YVal - modelPLS(i).YPred).^2);
-    modelPLS(i).Q2 = 1 - modelPLS(i).PRESS/modelPLS(i).TSS;
-end
-
-% Plot the variance explained by the components
-varNames = DataFrame.Properties.VariableNames(:);
+%% PCR
+nsize=min(size(x_calibration));
+[coeff,score,latent,tsquared,explained,mu] = pca(x_calibration,"Economy",false);
 figure;
-plot(1:8,100 * cumsum(ExplainedVariance(1:8))/sum(ExplainedVariance(1:7)),'-g*');
-hold on
-plot(1:8,100*cumsum(modelPLS(8).var(2,:))/sum(modelPLS(8).var(2,:)),'-c*');
-hold on
-plot(1:8,100*cumsum(modelPLS(8).var(1,:))/sum(modelPLS(8).var(1,:)),'-k*');
-xlabel('Components');
-ylabel('Explained Variance');
-legend(["Explained Variance PCA", "Explained Variance in Y for PLS", "Explained Variance in X for PLS"]);
-axis tight
-hold off;
+plot(1:nsize,100*cumsum(latent(1:nsize)/sum(latent(1:nsize))))
+xlabel("Number of principal components")
+ylabel("Explained Variance")
 
+for i=1:nsize
+
+    betapcs=regress(y_calibration,score(:,1:i));
+    betavars_1=coeff(:,1:i)*betapcs;
+    beta_pcr(:,i)=[mean(y_calibration)-mean(x_calibration)*betavars_1;betavars_1];
+
+    n=length(y_train);
+    yhat_pcr(:,i)=[ones(n,1) x_calibration]*beta_pcr(:,i);
+    m=length(y_test);
+    ypred_pcr(:,i)=[ones(m,1) x_test]*beta_pcr(:,i);
+
+    Tss(i)=sum(y_calibration.^2);
+    mse_pcr(i) = mean((y_test - ypred_pcr(:,i)).^2);
+
+
+    Rss(i)=sum((y_train-yhat_pcr(:,i)).^2);
+    R2_pcr(i)=1-Rss(i)/Tss(i);
+
+    predRss(i)=sum((y_test-ypred_pcr(:,i)).^2);
+    Q2_pcr(i)=1-predRss(i)/Tss(i);
+
+end
+
+%% PLS
+for i = 1:min(size(x_calibration))
+    [P,T,Q,U,beta_pls(:,i),var_pls, MSE,stats(:,i)]=plsregress(x_calibration,y_calibration,i,"cv",5);
+
+    n = length(y_calibration);
+    yhat_pls= [ones(n,1) x_calibration] * beta_pls(:,i);
+    m=length(y_test);
+    ypred_pls(:,i)=[ones(m,1) x_test] * beta_pls(:,i);
+
+    TSS=sum((y_calibration-mean(y_calibration)).^2);
+    % MSE
+    mse_pls(i)=mean((y_test-ypred_pls(:,i)).^2);
+    %R2
+    RSS(i)=sum((y_calibration-yhat_pls).^2);
+    R2_pls(i)=1 - RSS(i)/TSS;
+
+    %Q2
+    PRESS(i)=sum((y_test- ypred_pls(:,i)).^2);
+    Q2_pls(i)=1-PRESS(i)/TSS;
+end
+
+%% Evaluate Models: Task 4, 5, 6
+
+% Explained variance for PCR
+cumulative_explained_X=cumsum(explained);
+figure;
+subplot(2,1,1);
+plot(1:nsize,cumulative_explained_X(1:nsize),'b-o');
+xlabel('Number of Principal Components');
+ylabel('Cumulative Explained Variance in X');
+title('Cumulative Explained Variance in X for PCR');
+
+subplot(2,1,2);
+plot(1:nsize, R2_pcr, 'r-o', 1:nsize, Q2_pcr,'g-o');
+xlabel('Number of Principal Components');
+ylabel('Explained Variance in Y');
+legend('R^2','Q^2');
+title('Explained Variance in Y (R^2 and Q^2) for PCR');
+
+% Explained variance for PLSfigure;
+figure;
+plot(1:nsize,cumsum(var_pls(2,:)),'-bo');
+hold on
+plot(1:nsize,cumsum(var_pls(1,:)),'-ro');
+xlabel('Number of PLS components');
+ylabel('Percent Variance Explained in y');
+legend(["Var Explained in Y", "Var Explained in X"]);
+title('Cumulative Explained Variance in X and Y for PLS');
+
+
+% Plot MSE and Q^2 against the number of latent variables
+figure;
+subplot(2, 1, 1);
+plot(1:nsize, mse_pls, 'b-o');
+xlabel('Number of Latent Variables (PLS)');
+ylabel('MSE');
+title('MSE Plot for PLS');
+
+subplot(2, 1, 2);
+plot(1:nsize, Q2_pls, 'r-o');
+xlabel('Number of Latent Variables (PLS)');
+ylabel('Q^2');
+title('Q^2 Plot for PLS');
+
+% Plot MSE and Q^2 against the number of principal components
+figure;
+subplot(2, 1, 1);
+plot(1:nsize, mse_pcr, 'b-o');
+xlabel('Number of Principal Components (PCR)');
+ylabel('MSE');
+title('MSE Plot for PCR');
+
+subplot(2, 1, 2);
+plot(1:nsize, Q2_pcr, 'r-o');
+xlabel('Number of Principal Components (PCR)');
+ylabel('Q^2');
+title('Q^2 Plot for PCR');
+
+% Variable importance in prediction
+figure;
+betas=[beta_pls(2:end,5),beta_pcr(2:end,6)];
+bar(betas);
+legend(["PLS Regression Coefficients", "PCR Regression Coefficients"]);
+xticklabels(varNames);
+title("Importance of Variables")
+
+%% Recalibrate PLS
+ind_pls=[1,2,5,6,7,8];
+for i =1:6
+    [Pn,Tn,Qn,Un,beta_plsn(:,i),var_plsn, MSE,statsn(:,i)]=plsregress(x_calibration(:,ind_pls),y_calibration,i,"cv",5);
+    n = length(y_calibration);
+    yhat_pls= [ones(n,1) x_calibration(:,ind_pls)]*beta_plsn(:,i);
+    m=length(y_test);
+    ypred_pls_new(:,i)=[ones(m,1) x_test(:,ind_pls)] *beta_plsn(:,i);
+
+    TSS=sum((y_calibration - mean(y_calibration)).^2);
+    % MSE
+    New_mse_pls(i) = mean((y_test - ypred_pls_new(:,i)).^2);
+    %R2
+    RSS(i)=sum((y_calibration-yhat_pls).^2);
+    New_R2_pls(i)=1 - RSS(i)/TSS;
+
+    %Q2
+    PRESS(i)=sum((y_test-ypred_pls_new(:,i)).^2);
+    New_Q2_pls(i)=1-PRESS(i)/TSS;
+end
+
+%% Recalibrate PCR
+ind_pcr=[1,2,4,5,6,7,8];
+beta_pcr=[];
+nsize=min(size(x_calibration));
+[coeff,score,latent,tsquared,explained,mu] = pca(x_calibration(:,ind_pcr),"Economy",false);
+
+for i=1:7
+
+    betapcs=regress(y_calibration,score(:,1:i));
+    betavars_1=coeff(:,1:i)*betapcs;
+    beta_pcr(:,i)=[mean(y_train)-mean(x_calibration(:,ind_pcr))*betavars_1;betavars_1];
+
+    n=length(y_train);
+    yhat_pcr=[ones(n,1) x_calibration(:,ind_pcr)]*beta_pcr(:,i);
+    m=length(y_test);
+    ypred_pcr_new(:,i)=[ones(m,1) x_test(:,ind_pcr)]*beta_pcr(:,i);
+
+    Tss(i)=sum(y_calibration.^2);
+    New_mse_pcr(i) = mean((y_test -  ypred_pcr_new(:,i)).^2);
+
+
+    Rss(i)=sum((y_train-yhat_pcr).^2);
+    New_R2_pcr(i)=1-Rss(i)/Tss(i);
+
+    predRss(i)=sum((y_test- ypred_pcr_new(:,i)).^2);
+    New_Q2_pcr(i)=1-predRss(i)/Tss(i);
+
+end
+fprintf('Q2 after Recalibration for PCR: \n');
+disp(New_Q2_pcr(end))
+fprintf('Q2 after Recalibration for PLS: \n');
+disp(New_Q2_pls(end))
+
+%% Task 8
+% True values and the predicted values against each other
+figure;
+subplot(1,2,1);
+scatter(y_test,ypred_pcr_new(:,end),'filled');
+hold on;
+line([min(y_test),max(y_test)],[min(y_test),max(y_test)], 'Color', 'red', 'LineStyle', '--');
+xlabel('True Values');
+ylabel('Predicted Values');
+title('True vs Predicted Values for PCR');
+legend('Data Points', 'Perfect Prediction', 'Location', 'Northwest');
+subplot(1,2,2);
+scatter(y_test,ypred_pls_new(:,end),'filled');
+hold on;
+line([min(y_test),max(y_test)],[min(y_test),max(y_test)], 'Color', 'red', 'LineStyle', '--');
+xlabel('True Values');
+ylabel('Predicted Values');
+title('True vs Predicted Values for PLS');
+legend('Data Points', 'Perfect Prediction', 'Location', 'Northwest');
+
+
+% Plot the residuals as a function of the true value.
+figure;
+residuals_pcr=y_test-ypred_pcr_new(:,end);
+residuals_pls=y_test-ypred_pls_new(:,end);
+subplot(1,2,1);
+scatter(y_test,residuals_pls);
+xlabel('True Values (y-test)');
+ylabel('Residuals (PLS)');
+title('Residuals vs True Values (PLS)');
+subplot(1,2,2);
+scatter(y_test, residuals_pcr);
+xlabel('True Values (y-test)');
+ylabel('Residuals (PCR)');
+title('Residuals vs True Values (PCR)');
